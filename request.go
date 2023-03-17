@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"os"
 
-	urlutil "github.com/projectdiscovery/utils/url"
 	readerutil "github.com/zan8in/retryablehttp/pkg/utils/readerutil"
+	"github.com/zan8in/retryablehttp/pkg/utils/urlutil"
 )
 
 // When True . Request uses `http` as scheme instead of `https`
