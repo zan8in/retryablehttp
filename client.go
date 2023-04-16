@@ -60,6 +60,8 @@ type Options struct {
 	NoAdjustTimeout bool
 	// Custom http client
 	HttpClient *http.Client
+	// Proxy
+	Proxy string
 }
 
 // DefaultOptionsSpraying contains the default options for host spraying

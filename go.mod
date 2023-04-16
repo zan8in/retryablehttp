@@ -7,12 +7,15 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.22
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/stretchr/testify v1.8.2
+	github.com/zan8in/pins v0.0.0-20230415064757-40257618b466
 	golang.org/x/net v0.8.0
 )
 
 require (
+	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/gorilla/css v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/text v0.8.0 // indirect
