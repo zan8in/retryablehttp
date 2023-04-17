@@ -81,8 +81,6 @@ func processProxyList() error {
 		done := make(chan bool)
 		exitCounter := make(chan bool)
 		counter := 0
-		defer close(done)
-		defer close(exitCounter)
 
 		if len(proxyURLList) > 0 {
 			i := RandomIntWithMin(0, len(proxyURLList))
