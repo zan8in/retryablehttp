@@ -79,7 +79,7 @@ var DefaultPoolOptions = PoolOptions{
 	ClientKeyFile:       "",
 	ClientCAFile:        "",
 	Timeout:             10,
-	Threads:             10,
+	Threads:             0,
 	NoTimeout:           false,
 	CookieReuse:         false,
 	RedirectFlow:        DontFollowRedirect,
