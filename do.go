@@ -235,6 +235,9 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 	addr := net.JoinHostPort(host, port)
 	var conn net.Conn
 	var err error
+	if len(c.options.Proxy) > 0 && len(ProxyURL) == 0 && len(ProxySocksURL) == 0 {
+		_ = LoadProxyServers(c.options.Proxy)
+	}
 	useProxy := c.options.RawTCPFallbackAllowProxy && (ProxyURL != "" || ProxySocksURL != "" || c.options.Proxy != "")
 	if useProxy && ProxySocksURL != "" {
 		su, sErr := url.Parse(ProxySocksURL)
@@ -492,4 +495,20 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		}, nil
 	}
 	return resp, nil
+}
+
+func (c *Client) RawTCPDo(req *http.Request) (*http.Response, error) {
+	options := c.options
+	return RawTCPDo(req, &options)
+}
+
+func RawTCPDo(req *http.Request, opts *Options) (*http.Response, error) {
+	var options Options
+	if opts != nil {
+		options = *opts
+	} else {
+		options = DefaultOptionsSingle
+	}
+	c := &Client{options: options}
+	return c.rawTCPRequest(req)
 }
