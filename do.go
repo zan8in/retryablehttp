@@ -317,8 +317,10 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		} else {
 			conn = pconn
 			reqURLAbs := req.URL.String()
-			requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, reqURLAbs)
+			requestLine := fmt.Sprintf("%s %s HTTP/1.1\r\n", req.Method, reqURLAbs)
 			headers := "Host: " + req.URL.Host + "\r\n" + authHeader
+			headers += "Connection: close\r\n"
+			headers += "Proxy-Connection: close\r\n"
 			var bodyBytes []byte
 			if req.Body != nil {
 				bodyBytes, _ = io.ReadAll(req.Body)
