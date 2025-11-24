@@ -74,6 +74,48 @@ func LoadProxyServers(proxy string) error {
 	return processProxyList()
 }
 
+func LoadProxyServersWithTimeout(proxy string, timeoutDelay int) error {
+	if len(proxy) == 0 {
+		return nil
+	}
+
+	if len(strings.Split(proxy, ",")) > 1 {
+		for _, proxy := range strings.Split(proxy, ",") {
+			if strings.TrimSpace(proxy) == "" {
+				continue
+			}
+			if proxyURL, err := validateProxyURL(proxy); err != nil {
+				return err
+			} else {
+				proxyURLList = append(proxyURLList, proxyURL)
+			}
+		}
+	} else if proxyURL, err := validateProxyURL(proxy); err == nil {
+		proxyURLList = append(proxyURLList, proxyURL)
+	} else if fileutil.FileExists(proxy) {
+		file, err := os.Open(proxy)
+		if err != nil {
+			return fmt.Errorf("could not open proxy file: %w", err)
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			proxy := scanner.Text()
+			if strings.TrimSpace(proxy) == "" {
+				continue
+			}
+			if proxyURL, err := validateProxyURL(proxy); err != nil {
+				return err
+			} else {
+				proxyURLList = append(proxyURLList, proxyURL)
+			}
+		}
+	} else {
+		return fmt.Errorf("invalid proxy file or URL provided for %s", proxy)
+	}
+	return processProxyListWithTimeout(timeoutDelay)
+}
+
 func processProxyList() error {
 	if len(proxyURLList) == 0 {
 		return fmt.Errorf("could not find any valid proxy")
@@ -107,8 +149,51 @@ func processProxyList() error {
 	return nil
 }
 
+func processProxyListWithTimeout(timeoutDelay int) error {
+	if len(proxyURLList) == 0 {
+		return fmt.Errorf("could not find any valid proxy")
+	} else {
+		done := make(chan bool)
+		exitCounter := make(chan bool)
+		counter := 0
+
+		if len(proxyURLList) > 0 {
+			i := RandomIntWithMin(0, len(proxyURLList))
+			go runProxyConnectivityWithTimeout(proxyURLList[i], timeoutDelay, done, exitCounter)
+
+			for {
+				select {
+				case <-done:
+					{
+						close(done)
+						return nil
+					}
+				case <-exitCounter:
+					{
+						if counter += 1; counter == len(proxyURLList) {
+							return errors.New("no reachable proxy found")
+						}
+						close(exitCounter)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func runProxyConnectivity(proxyURL url.URL, done chan bool, exitCounter chan bool) {
 	if err := testProxyConnection(proxyURL, DefaultTimeout); err == nil {
+		if ProxyURL == "" && ProxySocksURL == "" {
+			assignProxyURL(proxyURL)
+			done <- true
+		}
+	}
+	exitCounter <- true
+}
+
+func runProxyConnectivityWithTimeout(proxyURL url.URL, timeoutDelay int, done chan bool, exitCounter chan bool) {
+	if err := testProxyConnection(proxyURL, timeoutDelay); err == nil {
 		if ProxyURL == "" && ProxySocksURL == "" {
 			assignProxyURL(proxyURL)
 			done <- true

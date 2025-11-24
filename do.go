@@ -236,7 +236,11 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 	var conn net.Conn
 	var err error
 	if len(c.options.Proxy) > 0 && len(ProxyURL) == 0 && len(ProxySocksURL) == 0 {
-		_ = LoadProxyServers(c.options.Proxy)
+		timeoutSec := int(c.options.Timeout / time.Second)
+		if timeoutSec <= 0 {
+			timeoutSec = DefaultTimeout
+		}
+		_ = LoadProxyServersWithTimeout(c.options.Proxy, timeoutSec)
 	}
 	useProxy := c.options.RawTCPFallbackAllowProxy && (ProxyURL != "" || ProxySocksURL != "" || c.options.Proxy != "")
 	if useProxy && ProxySocksURL != "" {
@@ -244,7 +248,7 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		if sErr != nil {
 			return nil, sErr
 		}
-		d, dErr := xproxy.FromURL(su, xproxy.Direct)
+		d, dErr := xproxy.FromURL(su, &net.Dialer{Timeout: c.options.Timeout})
 		if dErr != nil {
 			return nil, dErr
 		}
@@ -273,10 +277,14 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		}())
 		var pconn net.Conn
 		if pu.Scheme == "https" {
-			d := &net.Dialer{}
+			d := &net.Dialer{Timeout: c.options.Timeout}
 			pconn, err = tls.DialWithDialer(d, "tcp", paddr, &tls.Config{InsecureSkipVerify: true})
 		} else {
-			pconn, err = net.Dial("tcp", paddr)
+			if c.options.Timeout > 0 {
+				pconn, err = net.DialTimeout("tcp", paddr, c.options.Timeout)
+			} else {
+				pconn, err = net.Dial("tcp", paddr)
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -290,6 +298,9 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		}
 		if req.URL.Scheme == "https" {
 			cl := "CONNECT " + host + ":" + port + " HTTP/1.0\r\n" + "Host: " + host + ":" + port + "\r\n" + authHeader + "\r\n"
+			if c.options.Timeout > 0 {
+				_ = pconn.SetDeadline(time.Now().Add(c.options.Timeout))
+			}
 			if _, err := pconn.Write([]byte(cl)); err != nil {
 				pconn.Close()
 				return nil, err
@@ -314,6 +325,9 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 			}
 			tc := &tls.Config{InsecureSkipVerify: true}
 			conn = tls.Client(pconn, tc)
+			if c.options.Timeout > 0 {
+				_ = conn.SetDeadline(time.Now().Add(c.options.Timeout))
+			}
 		} else {
 			conn = pconn
 			reqURLAbs := req.URL.String()
@@ -398,10 +412,14 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		}
 	} else {
 		if req.URL.Scheme == "https" {
-			d := &net.Dialer{}
+			d := &net.Dialer{Timeout: c.options.Timeout}
 			conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
 		} else {
-			conn, err = net.Dial("tcp", addr)
+			if c.options.Timeout > 0 {
+				conn, err = net.DialTimeout("tcp", addr, c.options.Timeout)
+			} else {
+				conn, err = net.Dial("tcp", addr)
+			}
 		}
 		if err != nil {
 			return nil, err
