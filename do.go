@@ -40,6 +40,7 @@ func (c *Client) Do(req *Request) (*http.Response, error) {
 		}
 	}
 
+	didRawTCP := false
 	for i := 0; ; i++ {
 		// request body can be read multiple times
 		// hence no need to rewind it
@@ -57,12 +58,41 @@ func (c *Client) Do(req *Request) (*http.Response, error) {
 			resp, err = c.HTTPClient.Do(req.Request)
 		}
 
-		// 在 Do 方法中添加备用请求逻辑
-		if isRetryableError(err) {
-			rawResp, rawErr := c.rawTCPRequest(req.Request)
-			if rawErr == nil {
-				resp = rawResp
-				err = nil
+		if !didRawTCP && c.options.RawTCPFallbackEnabled {
+			mallowed := len(c.options.RawTCPFallbackMethods) == 0
+			if !mallowed {
+				for _, m := range c.options.RawTCPFallbackMethods {
+					if req.Request.Method == m {
+						mallowed = true
+						break
+					}
+				}
+			}
+			pblocked := (ProxyURL != "" || ProxySocksURL != "" || c.options.Proxy != "") && !c.options.RawTCPFallbackAllowProxy
+			patterns := c.options.RawTCPFallbackErrorPatterns
+			if len(patterns) == 0 {
+				patterns = retryableErrors
+			}
+			if mallowed && !pblocked {
+				emsg := ""
+				if err != nil {
+					emsg = err.Error()
+				}
+				match := false
+				for _, kw := range patterns {
+					if kw != "" && strings.Contains(emsg, kw) {
+						match = true
+						break
+					}
+				}
+				if match {
+					rawResp, rawErr := c.rawTCPRequest(req.Request)
+					if rawErr == nil {
+						resp = rawResp
+						err = nil
+						didRawTCP = true
+					}
+				}
 			}
 		}
 
@@ -234,7 +264,11 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 	}
 
 	buf := new(bytes.Buffer)
-	lr := io.LimitReader(conn, rawTCPMaxResponseBytes)
+	limit := c.options.RawTCPMaxResponseBytes
+	if limit <= 0 {
+		limit = rawTCPMaxResponseBytes
+	}
+	lr := io.LimitReader(conn, limit)
 	if _, err := buf.ReadFrom(lr); err != nil {
 		return nil, err
 	}
