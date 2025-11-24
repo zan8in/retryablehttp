@@ -1,18 +1,20 @@
 package retryablehttp
 
 import (
-	"bytes"
-	"context"
-	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
+    "bufio"
+    "bytes"
+    "context"
+    "crypto/tls"
+    "fmt"
+    "io"
+    "net"
+    "net/http"
+    "strconv"
+    "strings"
+    "sync/atomic"
+    "time"
 
-	dac "github.com/Mzack9999/go-http-digest-auth-client"
+    dac "github.com/Mzack9999/go-http-digest-auth-client"
 )
 
 // PassthroughErrorHandler is an ErrorHandler that directly passes through the
@@ -187,93 +189,106 @@ func isRetryableError(err error) bool {
 
 // 实现原始 TCP 请求
 func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
-	conn, err := net.Dial("tcp", req.URL.Host)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
+    host := req.URL.Hostname()
+    port := req.URL.Port()
+    if port == "" {
+        if req.URL.Scheme == "https" {
+            port = "443"
+        } else {
+            port = "80"
+        }
+    }
+    addr := net.JoinHostPort(host, port)
+    var conn net.Conn
+    var err error
+    if req.URL.Scheme == "https" {
+        d := &net.Dialer{}
+        conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+    } else {
+        conn, err = net.Dial("tcp", addr)
+    }
+    if err != nil {
+        return nil, err
+    }
+    defer conn.Close()
 
-	// 构造原始 HTTP 请求
-	requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, req.URL.RequestURI())
-	headers := "Host: " + req.URL.Host + "\r\n"
-	headers += "Connection: close\r\n"
-	if req.Body != nil {
-		bodyBytes, _ := io.ReadAll(req.Body)
-		headers += fmt.Sprintf("Content-Length: %d\r\n", len(bodyBytes))
-		requestLine += headers + "\r\n" + string(bodyBytes)
-	} else {
-		requestLine += headers + "\r\n"
-	}
+    requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, req.URL.RequestURI())
+    headers := "Host: " + req.URL.Host + "\r\n"
+    headers += "Connection: close\r\n"
+    var bodyBytes []byte
+    if req.Body != nil {
+        bodyBytes, _ = io.ReadAll(req.Body)
+        headers += fmt.Sprintf("Content-Length: %d\r\n", len(bodyBytes))
+    }
+    request := requestLine + headers + "\r\n"
+    if len(bodyBytes) > 0 {
+        request += string(bodyBytes)
+    }
 
-	// 发送请求
-	if _, err := conn.Write([]byte(requestLine)); err != nil {
-		return nil, err
-	}
+    if _, err := conn.Write([]byte(request)); err != nil {
+        return nil, err
+    }
 
-	// 读取原始响应数据
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(conn); err != nil {
-		return nil, err
-	}
+    buf := new(bytes.Buffer)
+    if _, err := buf.ReadFrom(conn); err != nil {
+        return nil, err
+    }
 
-	// 1. 解析原始响应数据中的 Header 部分
-	rawResponse := buf.Bytes()
-	headerEnd := bytes.Index(rawResponse, []byte("\r\n\r\n")) // 查找头与体的分界
-	if headerEnd == -1 {
-		// 若没有完整头，默认视为无头响应
-		headerEnd = 0
-	}
-
-	// 2. 分割 Header 和 Body
-	headerBytes := rawResponse[:headerEnd]
-	bodyBytes := rawResponse[headerEnd+4:] // 跳过两个 CRLF
-
-	// 3. 动态解析 Header
-	header := make(http.Header)
-	statusCode := 200 // 默认状态码
-	proto := "HTTP/1.0"
-
-	if len(headerBytes) > 0 {
-		// 解析状态行（如 "HTTP/1.0 200 OK"）
-		firstLineEnd := bytes.IndexByte(headerBytes, '\n')
-		if firstLineEnd != -1 {
-			firstLine := string(bytes.TrimSpace(headerBytes[:firstLineEnd]))
-			parts := strings.SplitN(firstLine, " ", 3)
-			if len(parts) >= 2 {
-				proto = parts[0]                       // 协议版本（如 HTTP/1.0）
-				statusCode, _ = strconv.Atoi(parts[1]) // 状态码
-			}
-		}
-
-		// 解析头字段（如 "Content-Type: application/octet-stream"）
-		rawHeaders := bytes.Split(headerBytes, []byte("\r\n"))
-		for _, line := range rawHeaders[1:] { // 跳过状态行
-			if colonIndex := bytes.IndexByte(line, ':'); colonIndex != -1 {
-				key := string(bytes.TrimSpace(line[:colonIndex]))
-				value := string(bytes.TrimSpace(line[colonIndex+1:]))
-				header.Add(key, value)
-			}
-		}
-	}
-
-	// 4. 补充必要 Header（若缺失）
-	if header.Get("Content-Length") == "" {
-		header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-	}
-	if header.Get("Content-Type") == "" {
-		header.Set("Content-Type", "application/octet-stream") // 默认值
-	}
-
-	// 5. 构造 Response 对象
-	return &http.Response{
-		Status:        fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)),
-		StatusCode:    statusCode,
-		Proto:         proto,
-		ProtoMajor:    1, // 假设为 HTTP/1.x
-		ProtoMinor:    0,
-		Header:        header,
-		Body:          io.NopCloser(bytes.NewReader(bodyBytes)),
-		Request:       req,
-		ContentLength: int64(len(bodyBytes)),
-	}, nil
+    rawResponse := buf.Bytes()
+    if len(rawResponse) == 0 {
+        return nil, fmt.Errorf("empty raw response")
+    }
+    br := bufio.NewReader(bytes.NewReader(rawResponse))
+    resp, err := http.ReadResponse(br, req)
+    if err != nil {
+        headerEnd := bytes.Index(rawResponse, []byte("\r\n\r\n"))
+        var headerBytes []byte
+        var body []byte
+        if headerEnd >= 0 && len(rawResponse) >= headerEnd+4 {
+            headerBytes = rawResponse[:headerEnd]
+            body = rawResponse[headerEnd+4:]
+        } else {
+            body = rawResponse
+        }
+        header := make(http.Header)
+        statusCode := 200
+        proto := "HTTP/1.0"
+        if len(headerBytes) > 0 {
+            firstLineEnd := bytes.IndexByte(headerBytes, '\n')
+            if firstLineEnd != -1 {
+                firstLine := string(bytes.TrimSpace(headerBytes[:firstLineEnd]))
+                parts := strings.SplitN(firstLine, " ", 3)
+                if len(parts) >= 2 {
+                    proto = parts[0]
+                    statusCode, _ = strconv.Atoi(parts[1])
+                }
+            }
+            rawHeaders := bytes.Split(headerBytes, []byte("\r\n"))
+            for _, line := range rawHeaders[1:] {
+                if colonIndex := bytes.IndexByte(line, ':'); colonIndex != -1 {
+                    key := string(bytes.TrimSpace(line[:colonIndex]))
+                    value := string(bytes.TrimSpace(line[colonIndex+1:]))
+                    header.Add(key, value)
+                }
+            }
+        }
+        if header.Get("Content-Length") == "" {
+            header.Set("Content-Length", strconv.Itoa(len(body)))
+        }
+        if header.Get("Content-Type") == "" {
+            header.Set("Content-Type", "application/octet-stream")
+        }
+        return &http.Response{
+            Status:        fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)),
+            StatusCode:    statusCode,
+            Proto:         proto,
+            ProtoMajor:    1,
+            ProtoMinor:    0,
+            Header:        header,
+            Body:          io.NopCloser(bytes.NewReader(body)),
+            Request:       req,
+            ContentLength: int64(len(body)),
+        }, nil
+    }
+    return resp, nil
 }
