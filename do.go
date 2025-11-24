@@ -335,14 +335,32 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 			headers := "Host: " + req.URL.Host + "\r\n" + authHeader
 			headers += "Connection: close\r\n"
 			headers += "Proxy-Connection: close\r\n"
+			for k, vals := range req.Header {
+				if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Proxy-Connection") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+					continue
+				}
+				for _, v := range vals {
+					headers += k + ": " + v + "\r\n"
+				}
+			}
 			var bodyBytes []byte
+			teChunked := false
 			if req.Body != nil {
 				bodyBytes, _ = io.ReadAll(req.Body)
-				headers += fmt.Sprintf("Content-Length: %d\r\n", len(bodyBytes))
+				if req.ContentLength > 0 {
+					headers += fmt.Sprintf("Content-Length: %d\r\n", int(req.ContentLength))
+				} else {
+					headers += "Transfer-Encoding: chunked\r\n"
+					teChunked = true
+				}
 			}
 			request := requestLine + headers + "\r\n"
 			if len(bodyBytes) > 0 {
-				request += string(bodyBytes)
+				if teChunked {
+					request += fmt.Sprintf("%x\r\n", len(bodyBytes)) + string(bodyBytes) + "\r\n0\r\n\r\n"
+				} else {
+					request += string(bodyBytes)
+				}
 			}
 			if c.options.Timeout > 0 {
 				_ = conn.SetDeadline(time.Now().Add(c.options.Timeout))
@@ -432,17 +450,35 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		_ = conn.SetDeadline(time.Now().Add(c.options.Timeout))
 	}
 	defer conn.Close()
-	requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, req.URL.RequestURI())
+	requestLine := fmt.Sprintf("%s %s HTTP/1.1\r\n", req.Method, req.URL.RequestURI())
 	headers := "Host: " + req.URL.Host + "\r\n"
 	headers += "Connection: close\r\n"
+	for k, vals := range req.Header {
+		if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+			continue
+		}
+		for _, v := range vals {
+			headers += k + ": " + v + "\r\n"
+		}
+	}
 	var bodyBytes []byte
+	teChunked := false
 	if req.Body != nil {
 		bodyBytes, _ = io.ReadAll(req.Body)
-		headers += fmt.Sprintf("Content-Length: %d\r\n", len(bodyBytes))
+		if req.ContentLength > 0 {
+			headers += fmt.Sprintf("Content-Length: %d\r\n", int(req.ContentLength))
+		} else {
+			headers += "Transfer-Encoding: chunked\r\n"
+			teChunked = true
+		}
 	}
 	request := requestLine + headers + "\r\n"
 	if len(bodyBytes) > 0 {
-		request += string(bodyBytes)
+		if teChunked {
+			request += fmt.Sprintf("%x\r\n", len(bodyBytes)) + string(bodyBytes) + "\r\n0\r\n\r\n"
+		} else {
+			request += string(bodyBytes)
+		}
 	}
 	if _, err := conn.Write([]byte(request)); err != nil {
 		return nil, err
