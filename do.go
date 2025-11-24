@@ -518,8 +518,7 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 }
 
 func (c *Client) RawTCPDo(req *http.Request) (*http.Response, error) {
-	options := c.options
-	return RawTCPDo(req, &options)
+	return c.rawTCPRequest(req)
 }
 
 func RawTCPDo(req *http.Request, opts *Options) (*http.Response, error) {
