@@ -79,10 +79,10 @@ var DefaultOptionsSpraying = Options{
 	RespReadLimit:            4096,
 	KillIdleConn:             true,
 	NoAdjustTimeout:          true,
-	RawTCPMaxResponseBytes:   int64(2 << 20),          // 原始 TCP 回退的最大响应字节数上限（约 2MB），防止 OOM
-	RawTCPFallbackEnabled:    true,                    // 启用原始 TCP 回退，仅在解析型错误命中时触发，提升兼容性
-	RawTCPFallbackMethods:    []string{"GET", "HEAD"}, // 允许回退的方法（默认幂等，避免副作用）
-	RawTCPFallbackAllowProxy: false,                   // 启用代理时是否允许原始回退；默认禁用以免绕过代理
+	RawTCPMaxResponseBytes:   int64(2 << 20),                                                       // 原始 TCP 回退的最大响应字节数上限（约 2MB），防止 OOM
+	RawTCPFallbackEnabled:    true,                                                                 // 启用原始 TCP 回退，仅在解析型错误命中时触发，提升兼容性
+	RawTCPFallbackMethods:    []string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"}, // 允许回退的方法（默认幂等，避免副作用）
+	RawTCPFallbackAllowProxy: true,                                                                 // 启用代理时是否允许原始回退；默认禁用以免绕过代理
 }
 
 // DefaultOptionsSingle contains the default options for host bruteforce
@@ -97,8 +97,8 @@ var DefaultOptionsSingle = Options{
 	NoAdjustTimeout:          true,
 	RawTCPMaxResponseBytes:   int64(2 << 20),
 	RawTCPFallbackEnabled:    true,
-	RawTCPFallbackMethods:    []string{"GET", "HEAD"},
-	RawTCPFallbackAllowProxy: false,
+	RawTCPFallbackMethods:    []string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"},
+	RawTCPFallbackAllowProxy: true,
 }
 
 // NewClient creates a new Client with default settings.

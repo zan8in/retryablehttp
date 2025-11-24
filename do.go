@@ -5,16 +5,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	dac "github.com/Mzack9999/go-http-digest-auth-client"
+	xproxy "golang.org/x/net/proxy"
 )
 
 // PassthroughErrorHandler is an ErrorHandler that directly passes through the
@@ -232,11 +235,172 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 	addr := net.JoinHostPort(host, port)
 	var conn net.Conn
 	var err error
-	if req.URL.Scheme == "https" {
-		d := &net.Dialer{}
-		conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	useProxy := c.options.RawTCPFallbackAllowProxy && (ProxyURL != "" || ProxySocksURL != "" || c.options.Proxy != "")
+	if useProxy && ProxySocksURL != "" {
+		su, sErr := url.Parse(ProxySocksURL)
+		if sErr != nil {
+			return nil, sErr
+		}
+		d, dErr := xproxy.FromURL(su, xproxy.Direct)
+		if dErr != nil {
+			return nil, dErr
+		}
+		conn, err = d.Dial("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		if req.URL.Scheme == "https" {
+			tc := &tls.Config{InsecureSkipVerify: true}
+			conn = tls.Client(conn, tc)
+		}
+	} else if useProxy && ProxyURL != "" {
+		pu, pErr := url.Parse(ProxyURL)
+		if pErr != nil {
+			return nil, pErr
+		}
+		paddr := net.JoinHostPort(pu.Hostname(), func() string {
+			if pu.Port() != "" {
+				return pu.Port()
+			} else {
+				if pu.Scheme == "https" {
+					return "443"
+				}
+				return "80"
+			}
+		}())
+		var pconn net.Conn
+		if pu.Scheme == "https" {
+			d := &net.Dialer{}
+			pconn, err = tls.DialWithDialer(d, "tcp", paddr, &tls.Config{InsecureSkipVerify: true})
+		} else {
+			pconn, err = net.Dial("tcp", paddr)
+		}
+		if err != nil {
+			return nil, err
+		}
+		var authHeader string
+		if pu.User != nil {
+			u := pu.User.Username()
+			pw, _ := pu.User.Password()
+			token := base64.StdEncoding.EncodeToString([]byte(u + ":" + pw))
+			authHeader = "Proxy-Authorization: Basic " + token + "\r\n"
+		}
+		if req.URL.Scheme == "https" {
+			cl := "CONNECT " + host + ":" + port + " HTTP/1.0\r\n" + "Host: " + host + ":" + port + "\r\n" + authHeader + "\r\n"
+			if _, err := pconn.Write([]byte(cl)); err != nil {
+				pconn.Close()
+				return nil, err
+			}
+			br := bufio.NewReader(pconn)
+			var headerBuf bytes.Buffer
+			for {
+				line, rErr := br.ReadString('\n')
+				if rErr != nil {
+					pconn.Close()
+					return nil, rErr
+				}
+				headerBuf.WriteString(line)
+				if strings.TrimSpace(line) == "" {
+					break
+				}
+			}
+			first := headerBuf.String()
+			if !strings.Contains(first, " 200 ") {
+				pconn.Close()
+				return nil, fmt.Errorf("proxy CONNECT failed")
+			}
+			tc := &tls.Config{InsecureSkipVerify: true}
+			conn = tls.Client(pconn, tc)
+		} else {
+			conn = pconn
+			reqURLAbs := req.URL.String()
+			requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, reqURLAbs)
+			headers := "Host: " + req.URL.Host + "\r\n" + authHeader
+			var bodyBytes []byte
+			if req.Body != nil {
+				bodyBytes, _ = io.ReadAll(req.Body)
+				headers += fmt.Sprintf("Content-Length: %d\r\n", len(bodyBytes))
+			}
+			request := requestLine + headers + "\r\n"
+			if len(bodyBytes) > 0 {
+				request += string(bodyBytes)
+			}
+			if c.options.Timeout > 0 {
+				_ = conn.SetDeadline(time.Now().Add(c.options.Timeout))
+			}
+			if _, err := conn.Write([]byte(request)); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			buf := new(bytes.Buffer)
+			limit := c.options.RawTCPMaxResponseBytes
+			if limit <= 0 {
+				limit = rawTCPMaxResponseBytes
+			}
+			lr := io.LimitReader(conn, limit)
+			if _, err := buf.ReadFrom(lr); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			rawResponse := buf.Bytes()
+			if len(rawResponse) == 0 {
+				conn.Close()
+				return nil, fmt.Errorf("empty raw response")
+			}
+			br := bufio.NewReader(bytes.NewReader(rawResponse))
+			resp, err := http.ReadResponse(br, req)
+			if err != nil {
+				headerEnd := bytes.Index(rawResponse, []byte("\r\n\r\n"))
+				var headerBytes []byte
+				var body []byte
+				if headerEnd >= 0 && len(rawResponse) >= headerEnd+4 {
+					headerBytes = rawResponse[:headerEnd]
+					body = rawResponse[headerEnd+4:]
+				} else {
+					body = rawResponse
+				}
+				header := make(http.Header)
+				statusCode := 200
+				proto := "HTTP/1.0"
+				if len(headerBytes) > 0 {
+					firstLineEnd := bytes.IndexByte(headerBytes, '\n')
+					if firstLineEnd != -1 {
+						firstLine := string(bytes.TrimSpace(headerBytes[:firstLineEnd]))
+						parts := strings.SplitN(firstLine, " ", 3)
+						if len(parts) >= 2 {
+							proto = parts[0]
+							statusCode, _ = strconv.Atoi(parts[1])
+						}
+					}
+					rawHeaders := bytes.Split(headerBytes, []byte("\r\n"))
+					for _, line := range rawHeaders[1:] {
+						if colonIndex := bytes.IndexByte(line, ':'); colonIndex != -1 {
+							key := string(bytes.TrimSpace(line[:colonIndex]))
+							value := string(bytes.TrimSpace(line[colonIndex+1:]))
+							header.Add(key, value)
+						}
+					}
+				}
+				if header.Get("Content-Length") == "" {
+					header.Set("Content-Length", strconv.Itoa(len(body)))
+				}
+				if header.Get("Content-Type") == "" {
+					header.Set("Content-Type", "application/octet-stream")
+				}
+				return &http.Response{Status: fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)), StatusCode: statusCode, Proto: proto, ProtoMajor: 1, ProtoMinor: 0, Header: header, Body: io.NopCloser(bytes.NewReader(body)), Request: req, ContentLength: int64(len(body))}, nil
+			}
+			return resp, nil
+		}
 	} else {
-		conn, err = net.Dial("tcp", addr)
+		if req.URL.Scheme == "https" {
+			d := &net.Dialer{}
+			conn, err = tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+		} else {
+			conn, err = net.Dial("tcp", addr)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -245,7 +409,6 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 		_ = conn.SetDeadline(time.Now().Add(c.options.Timeout))
 	}
 	defer conn.Close()
-
 	requestLine := fmt.Sprintf("%s %s HTTP/1.0\r\n", req.Method, req.URL.RequestURI())
 	headers := "Host: " + req.URL.Host + "\r\n"
 	headers += "Connection: close\r\n"
@@ -258,7 +421,6 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 	if len(bodyBytes) > 0 {
 		request += string(bodyBytes)
 	}
-
 	if _, err := conn.Write([]byte(request)); err != nil {
 		return nil, err
 	}

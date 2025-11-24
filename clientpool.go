@@ -65,26 +65,35 @@ type PoolOptions struct {
 	// Connection defines custom connection configuration
 	Connection *ConnectionConfiguration
 	// Proxy string defines
-	Proxy string
+	Proxy                       string
+	RawTCPMaxResponseBytes      int64
+	RawTCPFallbackEnabled       bool
+	RawTCPFallbackMethods       []string
+	RawTCPFallbackAllowProxy    bool
+	RawTCPFallbackErrorPatterns []string
 }
 
 var DefaultPoolOptions = PoolOptions{
-	Retries:             1,
-	MaxRedirects:        10,
-	FollowRedirects:     false,
-	FollowHostRedirects: false,
-	DisableRedirects:    true,
-	SNI:                 "",
-	ClientCertFile:      "",
-	ClientKeyFile:       "",
-	ClientCAFile:        "",
-	Timeout:             10,
-	Threads:             0,
-	NoTimeout:           false,
-	CookieReuse:         false,
-	RedirectFlow:        DontFollowRedirect,
-	Connection:          nil,
-	Proxy:               "",
+	Retries:                  1,
+	MaxRedirects:             10,
+	FollowRedirects:          false,
+	FollowHostRedirects:      false,
+	DisableRedirects:         true,
+	SNI:                      "",
+	ClientCertFile:           "",
+	ClientKeyFile:            "",
+	ClientCAFile:             "",
+	Timeout:                  10,
+	Threads:                  0,
+	NoTimeout:                false,
+	CookieReuse:              false,
+	RedirectFlow:             DontFollowRedirect,
+	Connection:               nil,
+	Proxy:                    "",
+	RawTCPMaxResponseBytes:   int64(2 << 20),
+	RawTCPFallbackEnabled:    true,
+	RawTCPFallbackMethods:    []string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"},
+	RawTCPFallbackAllowProxy: true,
 }
 
 func InitClientPool(options *PoolOptions) error {
@@ -247,6 +256,17 @@ func wrappedGet(options *PoolOptions) (*Client, error) {
 
 	retryableHttpOptions.RetryWaitMax = 10 * time.Second
 	retryableHttpOptions.RetryMax = options.Retries
+	if options.RawTCPMaxResponseBytes > 0 {
+		retryableHttpOptions.RawTCPMaxResponseBytes = options.RawTCPMaxResponseBytes
+	}
+	retryableHttpOptions.RawTCPFallbackEnabled = options.RawTCPFallbackEnabled
+	if len(options.RawTCPFallbackMethods) > 0 {
+		retryableHttpOptions.RawTCPFallbackMethods = options.RawTCPFallbackMethods
+	}
+	retryableHttpOptions.RawTCPFallbackAllowProxy = options.RawTCPFallbackAllowProxy
+	if len(options.RawTCPFallbackErrorPatterns) > 0 {
+		retryableHttpOptions.RawTCPFallbackErrorPatterns = options.RawTCPFallbackErrorPatterns
+	}
 	redirectFlow := options.RedirectFlow
 	maxRedirects := options.MaxRedirects
 
