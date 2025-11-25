@@ -3,6 +3,9 @@ package retryablehttp
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -418,6 +421,13 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 						}
 					}
 				}
+				enc := strings.ToLower(header.Get("Content-Encoding"))
+				if enc != "" {
+					if db, ok := decodeBody(enc, body); ok {
+						body = db
+						header.Del("Content-Encoding")
+					}
+				}
 				if header.Get("Content-Length") == "" {
 					header.Set("Content-Length", strconv.Itoa(len(body)))
 				}
@@ -425,6 +435,19 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 					header.Set("Content-Type", "application/octet-stream")
 				}
 				return &http.Response{Status: fmt.Sprintf("%d %s", statusCode, http.StatusText(statusCode)), StatusCode: statusCode, Proto: proto, ProtoMajor: 1, ProtoMinor: 0, Header: header, Body: io.NopCloser(bytes.NewReader(body)), Request: req, ContentLength: int64(len(body))}, nil
+			}
+			b, e := io.ReadAll(resp.Body)
+			if e == nil {
+				enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
+				if enc != "" {
+					if db, ok := decodeBody(enc, b); ok {
+						b = db
+						resp.Header.Del("Content-Encoding")
+					}
+				}
+				resp.Body = io.NopCloser(bytes.NewReader(b))
+				resp.ContentLength = int64(len(b))
+				resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
 			}
 			return resp, nil
 		}
@@ -532,6 +555,13 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 				}
 			}
 		}
+		enc := strings.ToLower(header.Get("Content-Encoding"))
+		if enc != "" {
+			if db, ok := decodeBody(enc, body); ok {
+				body = db
+				header.Del("Content-Encoding")
+			}
+		}
 		if header.Get("Content-Length") == "" {
 			header.Set("Content-Length", strconv.Itoa(len(body)))
 		}
@@ -550,6 +580,19 @@ func (c *Client) rawTCPRequest(req *http.Request) (*http.Response, error) {
 			ContentLength: int64(len(body)),
 		}, nil
 	}
+	b, e := io.ReadAll(resp.Body)
+	if e == nil {
+		enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
+		if enc != "" {
+			if db, ok := decodeBody(enc, b); ok {
+				b = db
+				resp.Header.Del("Content-Encoding")
+			}
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(b))
+		resp.ContentLength = int64(len(b))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
+	}
 	return resp, nil
 }
 
@@ -566,4 +609,37 @@ func RawTCPDo(req *http.Request, opts *Options) (*http.Response, error) {
 	}
 	c := &Client{options: options}
 	return c.rawTCPRequest(req)
+}
+func decodeBody(enc string, data []byte) ([]byte, bool) {
+	switch strings.ToLower(enc) {
+	case "gzip":
+		gr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, false
+		}
+		defer gr.Close()
+		b, err := io.ReadAll(gr)
+		if err != nil {
+			return nil, false
+		}
+		return b, true
+	case "deflate":
+		zr, err := zlib.NewReader(bytes.NewReader(data))
+		if err == nil {
+			b, e := io.ReadAll(zr)
+			zr.Close()
+			if e == nil {
+				return b, true
+			}
+		}
+		fr := flate.NewReader(bytes.NewReader(data))
+		defer fr.Close()
+		b, e := io.ReadAll(fr)
+		if e == nil {
+			return b, true
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
 }
