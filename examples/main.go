@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/zan8in/retryablehttp"
 )
@@ -26,6 +27,7 @@ func main() {
 	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0")
 	req.Header.Add("Accept-Encoding", "gzip")
 
+	start := time.Now()
 	resp, err := client.RawTCPDo(req.Request)
 	// resp, err := client.Do(req)
 	if err != nil {
@@ -70,5 +72,6 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(string(data))
+	fmt.Printf("\n耗时: %v\n", time.Since(start))
 
 }
