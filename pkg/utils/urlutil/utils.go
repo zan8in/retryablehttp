@@ -17,21 +17,22 @@ const (
 
 // AutoMergeRelPaths merges two relative paths including parameters and returns final string
 func AutoMergeRelPaths(path1 string, path2 string) (string, error) {
-	if path1 == "" || path2 == "" {
-		// no need to parse
-		return mergePaths(path1, path2), nil
-	}
-	u1, err1 := ParseRelativePath(path1, true)
-	if err1 != nil {
-		return "", err1
-	}
-	u2, err2 := ParseRelativePath(path2, true)
-	if err2 != nil {
-		return "", err2
-	}
-	u1.Params.Merge(u2.Params)
-	err := u1.MergePath(u2.Path, false)
-	return u1.GetRelativePath(), err
+    if path1 == "" || path2 == "" {
+        // no need to parse
+        return mergePaths(path1, path2), nil
+    }
+    u1, err1 := ParseRelativePath(path1, true)
+    if err1 != nil {
+        return "", err1
+    }
+    u2, err2 := ParseRelativePath(path2, true)
+    if err2 != nil {
+        return "", err2
+    }
+    u1.Params.Merge(u2.Params)
+    err := u1.MergePath(u2.Path, false)
+    u1.Update()
+    return u1.GetRelativePath(), err
 }
 
 // mergePaths merges two relative paths

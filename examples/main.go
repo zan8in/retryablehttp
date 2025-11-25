@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/zan8in/retryablehttp"
+	urlutil "github.com/zan8in/retryablehttp/pkg/utils/urlutil"
 )
 
 func main() {
 	opts := retryablehttp.DefaultOptionsSpraying
+	urlutil.PreserveQueryOrder = true
 
 	client := retryablehttp.NewClient(opts)
 
@@ -25,10 +27,10 @@ func main() {
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0")
-	req.Header.Add("Accept-Encoding", "gzip")
+	// req.Header.Add("Accept-Encoding", "gzip")
 
 	start := time.Now()
-	resp, err := client.RawTCPDo(req.Request)
+	resp, err := client.Do(req)
 	// resp, err := client.Do(req)
 	if err != nil {
 		panic(err)

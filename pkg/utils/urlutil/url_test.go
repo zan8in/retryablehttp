@@ -99,3 +99,19 @@ func TestInvalidURLs(t *testing.T) {
 		require.Equal(t, urlx.String(), v)
 	}
 }
+
+func TestPreserveQueryOrder(t *testing.T) {
+	PreserveQueryOrder = true
+	defer func() { PreserveQueryOrder = false }()
+	u, err := ParseURL("http://example.com/index.php?a=1&/post&b=2", true)
+	require.Nil(t, err)
+	require.Equal(t, "/index.php?a=1&/post&b=2", u.GetRelativePath())
+}
+
+func TestPreserveQueryOrderDuplicates(t *testing.T) {
+	PreserveQueryOrder = true
+	defer func() { PreserveQueryOrder = false }()
+	u, err := ParseURL("http://example.com/path?a=1&a=2&b=", true)
+	require.Nil(t, err)
+	require.Equal(t, "/path?a=1&a=2&b", u.GetRelativePath())
+}

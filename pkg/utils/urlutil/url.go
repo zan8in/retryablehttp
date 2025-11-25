@@ -17,10 +17,15 @@ var DisableAutoCorrect bool
 type URL struct {
 	*url.URL
 
-	Original   string // original or given url(without params if any)
-	Unsafe     bool   // If request is unsafe (skip validation)
-	IsRelative bool   // If URL is relative
-	Params     Params // Query Parameters
+	Original         string // original or given url(without params if any)
+	Unsafe           bool   // If request is unsafe (skip validation)
+	IsRelative       bool   // If URL is relative
+	Params           Params // Query Parameters
+	RawQueryOriginal string
+	paramPairs       []struct {
+		K string
+		V string
+	}
 	// should call Update() method when directly updating wrapped url.URL or parameters
 }
 
@@ -38,6 +43,7 @@ func (u *URL) MergePath(newrelpath string, unsafe bool) error {
 	if ux.Fragment != "" {
 		u.Fragment = ux.Fragment
 	}
+	u.Update()
 	return nil
 }
 
@@ -49,9 +55,10 @@ func (u *URL) UpdateRelPath(newrelpath string, unsafe bool) error {
 
 // Updates internal wrapped url.URL with any changes done to Query Parameters
 func (u *URL) Update() {
-	// This is a hot patch for url.URL
-	// parameters are serialized when parsed with `url.Parse()` to avoid this
-	// url should be parsed without parameters and then assigned with url.RawQuery to force unserialized parameters
+	if PreserveQueryOrder && len(u.paramPairs) > 0 {
+		u.RawQuery = u.encodeParamsOrdered()
+		return
+	}
 	u.RawQuery = u.Params.Encode()
 }
 
@@ -90,12 +97,21 @@ func (u *URL) Clone() *URL {
 			params[k] = v
 		}
 	}
+	pairs := make([]struct {
+		K string
+		V string
+	}, 0, len(u.paramPairs))
+	if len(u.paramPairs) > 0 {
+		pairs = append(pairs, u.paramPairs...)
+	}
 	return &URL{
-		URL:        ux,
-		Params:     params,
-		Original:   u.Original,
-		Unsafe:     u.Unsafe,
-		IsRelative: u.IsRelative,
+		URL:              ux,
+		Params:           params,
+		Original:         u.Original,
+		Unsafe:           u.Unsafe,
+		IsRelative:       u.IsRelative,
+		RawQueryOriginal: u.RawQueryOriginal,
+		paramPairs:       pairs,
 	}
 }
 
@@ -133,7 +149,10 @@ func (u *URL) GetRelativePath() string {
 		}
 		buff.WriteString(u.Path)
 	}
-	if len(u.Params) > 0 {
+	if u.RawQuery != "" {
+		buff.WriteRune('?')
+		buff.WriteString(u.RawQuery)
+	} else if len(u.Params) > 0 {
 		buff.WriteRune('?')
 		buff.WriteString(u.Params.Encode())
 	}
@@ -212,6 +231,8 @@ func (u *URL) fetchParams() {
 		return
 	} else {
 		encodedParams := u.Original[index+1:]
+		u.RawQueryOriginal = encodedParams
+		u.paramPairs = parseParamPairs(encodedParams)
 		u.Params.Decode(encodedParams)
 		u.Original = u.Original[:index]
 	}
@@ -370,4 +391,106 @@ func copy(dst *url.URL, src *url.URL) {
 	dst.RawPath = src.RawPath
 	dst.Scheme = src.Scheme
 	dst.User = src.User
+}
+
+var PreserveQueryOrder bool
+
+func parseParamPairs(raw string) []struct {
+	K string
+	V string
+} {
+	if raw == "" {
+		return nil
+	}
+	pairs := []struct {
+		K string
+		V string
+	}{}
+	arr := []string{}
+	var tbuff bytes.Buffer
+	for _, v := range raw {
+		switch v {
+		case '&':
+			arr = append(arr, tbuff.String())
+			tbuff.Reset()
+		case ';':
+			if AllowLegacySeperator {
+				arr = append(arr, tbuff.String())
+				tbuff.Reset()
+			} else {
+				tbuff.WriteRune(v)
+			}
+		default:
+			tbuff.WriteRune(v)
+		}
+	}
+	if tbuff.Len() > 0 {
+		arr = append(arr, tbuff.String())
+	}
+	for _, pair := range arr {
+		d := strings.SplitN(pair, "=", 2)
+		if len(d) == 2 {
+			pairs = append(pairs, struct {
+				K string
+				V string
+			}{K: d[0], V: d[1]})
+		} else if len(d) == 1 {
+			pairs = append(pairs, struct {
+				K string
+				V string
+			}{K: d[0], V: ""})
+		}
+	}
+	return pairs
+}
+
+func (u *URL) encodeParamsOrdered() string {
+	if u.Params == nil || len(u.paramPairs) == 0 {
+		return u.Params.Encode()
+	}
+	var buf bytes.Buffer
+	used := map[string]int{}
+	for _, pr := range u.paramPairs {
+		vs, ok := u.Params[pr.K]
+		if !ok || len(vs) == 0 {
+			if buf.Len() > 0 {
+				buf.WriteByte('&')
+			}
+			buf.WriteString(ParamEncode(pr.K))
+			if pr.V != "" {
+				buf.WriteByte('=')
+				buf.WriteString(ParamEncode(pr.V))
+			}
+			continue
+		}
+		idx := used[pr.K]
+		if idx >= len(vs) {
+			continue
+		}
+		if buf.Len() > 0 {
+			buf.WriteByte('&')
+		}
+		buf.WriteString(ParamEncode(pr.K))
+		val := ParamEncode(vs[idx])
+		if val != "" {
+			buf.WriteByte('=')
+			buf.WriteString(val)
+		}
+		used[pr.K] = idx + 1
+	}
+	for k, vs := range u.Params {
+		consumed := used[k]
+		for i := consumed; i < len(vs); i++ {
+			if buf.Len() > 0 {
+				buf.WriteByte('&')
+			}
+			buf.WriteString(ParamEncode(k))
+			val := ParamEncode(vs[i])
+			if val != "" {
+				buf.WriteByte('=')
+				buf.WriteString(val)
+			}
+		}
+	}
+	return buf.String()
 }
