@@ -199,6 +199,7 @@ func (c *Client) closeIdleConnections() {
 		} else {
 			atomic.StoreUint32(&c.requestCounter, 0)
 			c.HTTPClient.CloseIdleConnections()
+			c.HTTPClient2.CloseIdleConnections()
 		}
 	}
 }
